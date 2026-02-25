@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import List, Hashable
 from dotenv import load_dotenv
 load_dotenv()
-
+# cd /Users/jiazhenghao/CodingProjects/research/jz3 && pip install -e .
 from jz3.src.run_solvers import run_solvers
 # import sudoku_experiment_demo.Sudoku as Sudoku
 import Sudoku

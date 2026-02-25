@@ -1,2 +1,12 @@
-[tool.black]
-exclude = "*"
+[project]
+name = "argylesudoku"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "dotenv>=0.9.9",
+    "numpy>=2.4.0",
+    "pytest>=9.0.2",
+    "z3>=0.2.0",
+]

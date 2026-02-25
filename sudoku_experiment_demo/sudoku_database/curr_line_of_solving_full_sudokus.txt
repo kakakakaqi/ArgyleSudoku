@@ -1,1 +1,1 @@
-{'./sudoku_database/classic_full_sudokus.txt': 3172, './sudoku_database/argyle_full_sudokus.txt': 3172}
+{'./sudoku_database/classic_full_sudokus.txt': 7076, './sudoku_database/argyle_full_sudokus.txt': 7076}
