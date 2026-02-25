@@ -34,6 +34,7 @@ class Sql_db_wrapper:
 
         columns_str = ", ".join([f"{k} {v}" for k,v in columns.items()])
         self._cur.execute(f"CREATE TABLE IF NOT EXISTS {table_name} ({columns_str});")
+        self._conn.commit()
 
     def __getitem__(self, key: slice | int | list[str] | list[int]) -> _Db_columns:
         if isinstance(key, slice):

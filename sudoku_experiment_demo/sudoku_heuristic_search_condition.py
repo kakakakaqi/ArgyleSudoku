@@ -1,11 +1,13 @@
 import os
 import subprocess
+import sys
 import time
 import zipfile
 from pathlib import Path
 from typing import List, Hashable
 
 from Sudoku import *
+from sql_warp import Sql_db_wrapper
 
 FULL_CONDITIONS = [(classic, distinct, percol, nonum, prefill)  # must be hashable
                    for classic in (True, False)
@@ -140,12 +142,20 @@ def run_experiment_once(single_condition: bool, *args,
         condition_name = to_str(condition) + 'full_time'
         print('-', end="")
 
-        full_time, full_penalty = Sudoku.gen_full_sudoku(*condition, hard_smt_logPath=hard_smt_logPath,
+        full_time, full_penalty = gen_full_sudoku(*condition, hard_smt_logPath=hard_smt_logPath,
                                                          hard_sudoku_logPath=hard_sudoku_path,
                                                          store_sudoku_path=full_sudoku_path, seed=seed)
         with open(os.path.join(time_record_dir, condition_name + '.txt'), 'a') as f:
             os.makedirs(time_record_dir, exist_ok=True)
             f.write(f'{full_time},{full_penalty}\n')
+
+            table_name = "example"  # TODO: change into a parameter
+            wrapper = Sql_db_wrapper(path=os.path.join(time_record_dir, condition_name + '.db'), 
+                                     table_name=table_name,
+                                     columns={"ID": "INTEGER PRIMARY KEY",
+                                              "time_taken": "FLOAT",
+                                              "timeout_count": "INTEGER"})
+            del wrapper
 
     print("\nGenerating holes sudokus: \n"
           f'{"-" * len(conditions)}Total Conditions: {len(conditions)}')
@@ -176,7 +186,7 @@ def run_experiment_once(single_condition: bool, *args,
         if verbose:
             print(f'Processing holes sudoku {condition_name}')
         print('-', end="")
-        holes_time, holes_penalty = Sudoku.gen_holes_sudoku(eval(sudoku_lst), *condition,
+        holes_time, holes_penalty = gen_holes_sudoku(eval(sudoku_lst), *condition,
                                                             hard_smt_log_dir=hard_smt_logPath,
                                                             hard_sudoku_logPath=hard_sudoku_path,
                                                             store_sudoku_path=holes_sudoku_path, seed=seed)
@@ -184,6 +194,14 @@ def run_experiment_once(single_condition: bool, *args,
             print(f'\tTime taken: {holes_time}')
         with open(os.path.join(time_record_dir, condition_name + '.txt'), 'a+') as f_holes:
             f_holes.write(f'{holes_time},{holes_penalty}\n')
+
+            table_name = "example"  # TODO: change into a parameter
+            wrapper = Sql_db_wrapper(path=os.path.join(time_record_dir, condition_name + '.db'), 
+                                     table_name=table_name,
+                                     columns={"ID": "INTEGER PRIMARY KEY",
+                                              "time_taken": "FLOAT",
+                                              "timeout_count": "INTEGER"})
+            del wrapper
 
     par_dir = Path(curr_line_path).parent
     os.makedirs(par_dir, exist_ok=True)
@@ -193,7 +211,7 @@ def run_experiment_once(single_condition: bool, *args,
     print("Ran experiment once")
 
 
-def solve_with_z3(smt_log_file_path: str, time_out: int) -> (int, int, str):
+def solve_with_z3(smt_log_file_path: str, time_out: int) -> tuple[float, bool, str]:
     """
     :param smt_log_file_path:
     :param time_out: in seconds
@@ -222,12 +240,16 @@ def solve_with_z3(smt_log_file_path: str, time_out: int) -> (int, int, str):
     return (end_time - start_time, did_timeout, ans)
 
 
-def solve_with_cvc5(smt_log_file_path: str, time_out: int) -> (int, int, str):
+def solve_with_cvc5(smt_log_file_path: str, time_out: int) -> tuple[float, bool, str]:
     start_time = time.time()
     did_timeout = False
     try:
-        result = subprocess.run(["../../solvers/cvc5-macOS-arm64", smt_log_file_path, "--lang", "smt2"],
-                                capture_output=True, text=True, timeout=time_out)
+        if sys.platform == 'darwin':  # mac
+            result = subprocess.run(["../../solvers/cvc5-macOS-arm64", smt_log_file_path, "--lang", "smt2"],
+                                    capture_output=True, text=True, timeout=time_out)
+        elif sys.platform == 'linux':
+            result = subprocess.run(["../../jz3/jz3/solvers/cvc5-linux-x86", smt_log_file_path, "--lang", "smt2"],
+                                    capture_output=True, text=True, timeout=time_out)  # TODO: i think there is a function in jz3 for this
         combined_output = ((result.stdout if result.stdout is not None else "") +
                            (result.stderr if result.stderr is not None else ""))  # capture all output
     except subprocess.TimeoutExpired as exc:
@@ -249,7 +271,7 @@ def solve_with_cvc5(smt_log_file_path: str, time_out: int) -> (int, int, str):
     return (end_time - start_time, did_timeout, ans)
 
 
-def solve_with_yices(smt_log_file_path: str, time_out: int) -> (int, int, str):
+def solve_with_yices(smt_log_file_path: str, time_out: int) -> tuple[float, bool, str]:
     start_time = time.time()
     did_timeout = False
     try:
@@ -276,7 +298,7 @@ def solve_with_yices(smt_log_file_path: str, time_out: int) -> (int, int, str):
     return end_time - start_time, did_timeout, ans
 
 
-def solve_with_solver(solver_name: str, smt_file_path, time_out=5) -> (int, int, str):
+def solve_with_solver(solver_name: str, smt_file_path, time_out=5) -> tuple[int, int, str]:
     """
     solve an smt file with particular solver
     :param solver_name:
@@ -308,9 +330,11 @@ def load_and_alternative_solve_hard(hard_instances_txt_log_dir: str, is_classic:
     if is_classic:
         hard_instances_file_path = os.path.join(hard_instances_txt_log_dir, "hard_classic_instances.txt")
         store_comparison_file_path = os.path.join(time_record_dir,"classic_time.txt")
+        store_comparison_file_path_sql = os.path.join(time_record_dir,"classic_time.db")
     else:
         hard_instances_file_path = os.path.join(hard_instances_txt_log_dir, "hard_argyle_instance.txt")
         store_comparison_file_path = os.path.join(time_record_dir,"argyle_time.txt")
+        store_comparison_file_path_sql = os.path.join(time_record_dir,"argyle_time.db")
 
     with open(hard_instances_file_path, 'r+') as fr:
         with open(currline_path, "r") as ftempr:
@@ -370,6 +394,47 @@ def load_and_alternative_solve_hard(hard_instances_txt_log_dir: str, is_classic:
             # write time dictionary to file
             with open(store_comparison_file_path, 'a+') as fw:
                 fw.write(str(store_result_dict) + '\n')
+
+                table_name = "example"  # TODO: change into a parameter
+                wrapper = Sql_db_wrapper(path=store_comparison_file_path_sql, 
+                                         table_name=table_name, columns={"ID": "INTEGER PRIMARY KEY",
+                                                                         #
+                                                                         "problem_instance": "INTEGER",
+                                                                         "problem_grid": "TEXT",
+                                                                         "problem_index": "TEXT",
+                                                                         "problem_tryval": "INTEGER",
+                                                                         "problem_assert_equals": "BOOL",
+                                                                         "problem_is_sat": "TEXT",
+                                                                         #
+                                                                         "cond_is_classic": "BOOL",
+                                                                         "cond_is_distinct": "BOOL",
+                                                                         "cond_is_per_col": "BOOL",
+                                                                         "cond_is_no_num": "BOOL",
+                                                                         "cond_is_profill": "BOOL",
+                                                                         #
+                                                                         "res_time_z3": "FLOAT",
+                                                                         "res_timeout_z3": "BOOL"})
+
+                for key in store_result_dict.keys():
+                    if isinstance(key, str):
+                        continue
+                    # column 0 is the Primary Key.
+                    wrapper[1:].append([
+                        '-1',
+                        store_result_dict["problem"]["grid"],
+                        store_result_dict["problem"]["index"],
+                        store_result_dict["problem"]["try_Val"],
+                        store_result_dict["problem"]["is_sat"],
+                        '-1',
+                        key[0],
+                        key[1],
+                        key[2],
+                        key[3],
+                        key[4],
+                        store_result_dict[key]['z3'][0][0],
+                        store_result_dict[key]['z3'][0][1],
+                    ])
+                del wrapper
         with open(currline_path, 'w') as fw:
             fw.truncate()
             fw.write(str(argyle_and_classic_time_dict))
@@ -387,6 +452,7 @@ def record_whole_problem_performance(num_iter: int=1,
         print(f"Provided directory does not exist, creating new directory: {time_record_whole_problem_dir}")
         os.makedirs(time_record_whole_problem_dir)
     store_time_comparison_path = os.path.join(time_record_whole_problem_dir,"time.txt")
+    store_time_comparison_path_sql = os.path.join(time_record_whole_problem_dir,"time.db")
 
     # Iterate through all possible condition combinations
     for _ in range(num_iter):
@@ -403,7 +469,7 @@ def record_whole_problem_performance(num_iter: int=1,
                     store_result_dict[single_condition] = {}
                 if "smt_path" not in store_result_dict[single_condition]:
                     # generate the smt file corresponding to the problem
-                    s_full = Sudoku.Sudoku(empty_list,*condition,seed=seed)
+                    s_full = Sudoku(empty_list,*condition,seed=seed)
                     single_condition_smt_path = s_full.gen_full_and_write_smt2_to_file(smt_dir=smt_log_dir) # write
                     store_result_dict[single_condition]["smt_path"] = single_condition_smt_path
                 else:
@@ -416,6 +482,47 @@ def record_whole_problem_performance(num_iter: int=1,
                     store_result_dict[single_condition][SOLVER] = instances_lst
                 with open(store_time_comparison_path, 'a+') as fw:
                     fw.write(str(store_result_dict) + '\n')
+
+                    table_name = "example"  # TODO: change into a parameter
+                    wrapper = Sql_db_wrapper(path=store_time_comparison_path_sql, 
+                                             table_name=table_name, columns={"ID": "INTEGER PRIMARY KEY",
+                                                                             #
+                                                                             "problem_instance": "INTEGER",
+                                                                             "problem_grid": "TEXT",
+                                                                             "problem_index": "TEXT",
+                                                                             "problem_tryval": "INTEGER",
+                                                                             "problem_assert_equals": "BOOL",
+                                                                             "problem_is_sat": "TEXT",
+                                                                             #
+                                                                             "cond_is_classic": "BOOL",
+                                                                             "cond_is_distinct": "BOOL",
+                                                                             "cond_is_per_col": "BOOL",
+                                                                             "cond_is_no_num": "BOOL",
+                                                                             "cond_is_profill": "BOOL",
+                                                                             #
+                                                                             "res_time_z3": "FLOAT",
+                                                                             "res_timeout_z3": "BOOL"})
+
+                    for key in store_result_dict.keys():
+                        if isinstance(key, str):
+                            continue
+                        # column 0 is the Primary Key.
+                        wrapper[1:].append([
+                            '-1',
+                            store_result_dict["problem"]["grid"],
+                            '-1',
+                            -1,
+                            0,
+                            '-1',
+                            key[0],
+                            key[1],
+                            key[2],
+                            key[3],
+                            key[4],
+                            store_result_dict[key]['z3'][0][0],
+                            store_result_dict[key]['z3'][0][1],
+                        ])
+                    del wrapper
     # TODO: @sj Cannot implement this for holes
 
             # Generate holes sudoku, to be implemented
@@ -452,7 +559,8 @@ if __name__ == '__main__':
     # #                            currline_path=alternative_solve_curr_line_path, timeout=TIME_OUT)
     # load_and_alternative_solve_hard(hard_instances_txt_log_dir=hard_instances_txt_log_dir, time_record_dir=time_record_dir, is_classic=False, num_iter=1,
     #                                 currline_path=currline_path, timeout=TIME_OUT)
-    record_whole_problem_performance(time_record_dir="../../time-record/",timeout=30)
+    # record_whole_problem_performance(time_record_dir="../../time-record/",timeout=30)
+    record_whole_problem_performance(time_record_dir="./time-record/",timeout=30, smt_log_dir="./problems_instances/whole_p")
     # for i in range(1):
     #     run_experiment_once(False,
     #                         **dct
